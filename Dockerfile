@@ -25,42 +25,60 @@ FROM debian:jessie-backports
 # Note that the provided entrypoint.sh will create an initial admin
 # accouint optionally and set the initial password to changeit.
 #
+# Note that in order to avoid an AUFS backend issue with directory
+# permissions on /etc/ssl/private, ssl-cert package must be install in the
+# first layer command such that the first layer has the correct permission.
+# Ref to  to https://github.com/docker/docker/issues/783
+# which causes postgresql to fail (https://github.com/chbrandt/docker-dachs/issues/1).
+#
 # The important VOLUMES for persistent storage are defined at the end
 # of the file.
 #
 
 MAINTAINER Christophe Guillon <christophe.guillon@st.com>
 
+# Install first dependencies and common services
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
-    apt-get install -y wget && \
-    wget -q http://images.validation.linaro.org/production-repo/production-repo.key.asc && \
-    apt-key add production-repo.key.asc && rm production-repo.key.asc && \
-    echo "deb http://images.validation.linaro.org/production-repo sid main" >/etc/apt/sources.list.d/linaro.list
-
-RUN export DEBIAN_FRONTEND=noninteractive && \
-    apt-get update && \
-    apt-get install -y expect postgresql && \
-    apt-get install -t jessie-backports -y python-django python-django-tables2 && \
-    apt-get install -y lava-tool lava-dispatcher lava-coordinator && \
+    apt-get install -y ssl-cert wget expect telnet && \
+    apt-get install -y postgresql && \
     apt-get install -y apache2
 
+# Install django (>= 1.8) from backports
+RUN export DEBIAN_FRONTEND=noninteractive && \
+    apt-get install -t jessie-backports -y python-django python-django-tables2
+
+# Setup linaro PPA
+RUN wget -q http://images.validation.linaro.org/production-repo/production-repo.key.asc && \
+    apt-key add production-repo.key.asc && \
+    rm production-repo.key.asc && \
+    echo "deb http://images.validation.linaro.org/production-repo sid main" >/etc/apt/sources.list.d/linaro.list
+
+# Install lava tools
+RUN export DEBIAN_FRONTEND=noninteractive && \
+    apt-get update && \
+    apt-get install -y lava-tool lava-dispatcher lava-coordinator
+
+# Install lava server which needs the postgresql service running
 RUN service postgresql start && \
     export DEBIAN_FRONTEND=noninteractive && \
     apt-get install -y lava-server && \
-    service postgresql stop && \
-    apt-get clean
+    service postgresql stop
 
+# Configure the http server
 RUN a2dissite 000-default && \
     a2ensite lava-server.conf
 
+# Setup persistent volumes points
 VOLUME /var/lib/lava
 VOLUME /var/lib/lava-server
 VOLUME /var/lib/postgresql
 
+# Expose services ports
 EXPOSE 80
 EXPOSE 5432
 EXPOSE 3079
 
+# Set entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 ENTRYPOINT [ "/entrypoint.sh" ]
